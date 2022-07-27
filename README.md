@@ -1,1 +1,1 @@
-# lidyverse-contracts
+# wearable-trader-contracts
