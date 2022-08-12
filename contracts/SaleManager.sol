@@ -48,10 +48,10 @@ contract SaleManager is ReentrancyGuard, Ownable {
         require(_duration > 3600); // lower boundry for sale duration
         require(MerkleProof.verify(proof, merkleRoot, keccak256(abi.encodePacked(msg.sender))), "You are not allowed to list!");
 
-        uint listingId = listingIdCounter;  
-        Sale sale = new Sale(msg.sender, _duration*60, _minIncrement, _directBuyPrice, _startPrice, _nftAddress, _tokenId, _saleType, whitelistSale); // deploy new auction contract 
         IERC721 _nftToken = IERC721(_nftAddress);
         require(_nftToken.ownerOf(_tokenId)==msg.sender,"not owner of nft");
+        uint listingId = listingIdCounter;  
+        Sale sale = new Sale(msg.sender, _duration*60, _minIncrement, _directBuyPrice, _startPrice, _nftAddress, _tokenId, _saleType, whitelistSale); // deploy new auction contract 
         _nftToken.transferFrom(msg.sender, address(sale), _tokenId); //transfer NFT to auction contract
         listings[listingId] = address(sale);  // sale contract mapped to listing Id
         listingsIndexed[_nftAddress][_tokenId] = address(sale); // sale contract mapped to nft address and token id
