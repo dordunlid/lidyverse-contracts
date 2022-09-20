@@ -42,16 +42,15 @@ contract SaleManager is ReentrancyGuard, Ownable {
     }
     
     /// @param _saleType = 1 for auction, = 0 for direct sale
-    /// @param _duration is in minutes
-    function createListing(uint _duration, uint _minIncrement, uint _directBuyPrice,uint _startPrice,address _nftAddress,uint _tokenId,uint _saleType, bool whitelistSale, bytes32[] calldata proof)  external nonReentrant payable returns (bool) {
+    function createListing(uint _startTime, uint _endTime, uint _minIncrement, uint _directBuyPrice,uint _startPrice,address _nftAddress,uint _tokenId,uint _saleType, bool whitelistSale, bytes32[] calldata proof)  external nonReentrant payable returns (bool) {
         require(_directBuyPrice > 0); 
-        require(_duration > 3600); // lower boundry for sale duration
-        require(MerkleProof.verify(proof, merkleRoot, keccak256(abi.encodePacked(msg.sender))), "You are not allowed to list!");
+        require(_endTime - _startTime > 3600); // lower boundry for sale duration
+        require(MerkleProof.verify(proof, merkleRoot, keccak256(abi.encodePacked(_nftAddress))), "Listing is not available!");
 
         IERC721 _nftToken = IERC721(_nftAddress);
         require(_nftToken.ownerOf(_tokenId)==msg.sender,"not owner of nft");
         uint listingId = listingIdCounter;  
-        Sale sale = new Sale(msg.sender, _duration*60, _minIncrement, _directBuyPrice, _startPrice, _nftAddress, _tokenId, _saleType, whitelistSale); // deploy new auction contract 
+        Sale sale = new Sale(msg.sender, _startTime, _endTime, _minIncrement, _directBuyPrice, _startPrice, _nftAddress, _tokenId, _saleType, whitelistSale); // deploy new auction contract 
         _nftToken.transferFrom(msg.sender, address(sale), _tokenId); //transfer NFT to auction contract
         listings[listingId] = address(sale);  // sale contract mapped to listing Id
         listingsIndexed[_nftAddress][_tokenId] = address(sale); // sale contract mapped to nft address and token id
