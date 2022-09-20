@@ -13,11 +13,13 @@ contract Sale {
     uint public maxBid;
     address public maxBidder;
     address public creator;
-    address public lidyverse = 0xe51cf89D887986B4252AE4184CD36BB930Cc1e1f;
+    address public lidyverse = 0x64e48117560AE2b0b01AdaD0C5c84f029401a030;
     bytes32 public merkleRoot;
     Bid[] public bids;
     uint public tokenId;
     bool public isCancelled;
+    bool public isNftWithdrawn = false;
+    bool public areFundsWithdrawn = false;
     bool public isDirectBuy;
     uint public minIncrement;
     uint public directBuyPrice;
@@ -25,7 +27,7 @@ contract Sale {
     address public nftAddress;
     uint public saleType;
     bool public whitelistSale;
-    uint256 private lidyverseShare = 5;
+    uint256 private lidyverseShare = 2;
     IERC721 _nft;
 
     event NewBid(address bidder, uint bid);
@@ -42,7 +44,8 @@ contract Sale {
         OPEN,
         CANCELLED,
         ENDED,
-        DIRECT_BUY
+        DIRECT_BUY,
+        NOT_STARTED
     }
 
     struct Bid {
@@ -50,12 +53,12 @@ contract Sale {
         uint256 bid;
     }
 
-    constructor(address _creator, uint _duration,uint _minIncrement,uint _directBuyPrice, uint _startPrice,address _nftAddress,uint _tokenId,uint _saleType, bool whitelistSale_)
+    constructor(address _creator, uint _startTime, uint _endTime ,uint _minIncrement,uint _directBuyPrice, uint _startPrice,address _nftAddress,uint _tokenId,uint _saleType, bool whitelistSale_)
     payable
     {
         creator = _creator;
-        endTime = block.timestamp +  _duration;
-        startTime = block.timestamp;
+        endTime = _endTime;
+        startTime = _startTime;
         minIncrement = _minIncrement;
         directBuyPrice = _directBuyPrice;
         startPrice = _startPrice;
@@ -82,29 +85,59 @@ contract Sale {
         return (addrs, bidPrice);
     }
 
-    function placeBid() payable external returns(bool){
-        require(msg.sender != creator);
-        require(getSaleState() == SaleState.OPEN);
-        require(msg.value >= startPrice);
-
-        if(saleType == 1){
-        require(msg.value > maxBid + minIncrement);
-        }
+    function buyNow() payable external returns(bool){
+        require(msg.sender != creator, "Sender is not the creator.");
+        require(getSaleState() == SaleState.OPEN, "Sale is not open yet!");
+        require(msg.value >= directBuyPrice, "Value is less than buy price.");
+        require(isNftWithdrawn==false, "Nft is already withdrawn");
 
         address lastHightestBidder = maxBidder;
         uint256 lastHighestBid = maxBid;
 
         maxBid = msg.value;
         maxBidder = msg.sender;
-
-        if(msg.value >= directBuyPrice){
-            isDirectBuy = true;
-        }
+        isDirectBuy = true;
 
         bids.push(Bid(msg.sender,msg.value));
 
         if(lastHighestBid != 0){
-            refunds[lastHightestBidder] += lastHighestBid;
+            refunds[lastHightestBidder]=lastHighestBid;
+        }
+
+        emit NewBid(msg.sender,msg.value);
+        _nft.transferFrom(address(this), msg.sender, tokenId);
+        isNftWithdrawn=true;
+        emit WithdrawNFT(msg.sender);
+
+        return true;
+    }
+    
+
+
+    function placeBid() payable external returns(bool){
+        require(msg.sender != creator);
+        require(getSaleState() == SaleState.OPEN);
+        require(msg.value >= startPrice);
+
+        uint256 bidValue = refunds[msg.sender]+msg.value;
+
+        if(saleType == 1){
+            require(bidValue > maxBid + minIncrement);
+        }
+
+        address lastHightestBidder = maxBidder;
+        uint256 lastHighestBid = maxBid;
+
+        maxBid = refunds[msg.sender]+msg.value;
+        maxBidder = msg.sender;
+
+        if(msg.value >= directBuyPrice){
+            isDirectBuy = true;
+        }
+        bids.push(Bid(msg.sender, maxBid));
+
+        if(lastHighestBid != 0){
+            refunds[lastHightestBidder] = lastHighestBid;
         }
 
         emit NewBid(msg.sender,msg.value);
@@ -116,12 +149,15 @@ contract Sale {
     function withdrawNFT() external returns(bool){
         require(getSaleState() == SaleState.ENDED || getSaleState() == SaleState.DIRECT_BUY);
         require(msg.sender == maxBidder);
+        require(isNftWithdrawn==false, "Nft is already withdrawn");
         _nft.transferFrom(address(this), maxBidder, tokenId);
+        isNftWithdrawn=true;
         emit WithdrawNFT(maxBidder);
         return true;
     }
 
     function getRefund() external returns(bool){
+        require(msg.sender != maxBidder);
         uint256 balance = refunds[msg.sender];
         require(balance > 0);
         refunds[msg.sender] = 0;
@@ -132,16 +168,18 @@ contract Sale {
 
 
     function withdrawFunds() external returns(bool){
-        require(getSaleState() == SaleState.ENDED || getSaleState() == SaleState.DIRECT_BUY);
-        require(msg.sender == creator);
+        require(getSaleState() == SaleState.ENDED || getSaleState() == SaleState.DIRECT_BUY, "Sale has not finished yet.");
+        require(msg.sender == creator, "Address is not the seller's.");
+        require(areFundsWithdrawn==false,"Funds are already withdrawn");
         (address receiver_, uint256 royaltyAmount) = IERC2981(nftAddress).royaltyInfo(tokenId,maxBid);
-        uint256 royaltyShare = (royaltyAmount / maxBid) * 100;
-        uint256 creatorShare = 100 - (royaltyShare + lidyverseShare);
+        uint256 mgshare = (maxBid * lidyverseShare) / 100;
+        uint256 creatorShare = maxBid - (royaltyAmount + mgshare);
 
-        payable(receiver_).transfer((maxBid * royaltyShare) / 100);
-        payable(creator).transfer((maxBid * creatorShare) / 100);
-        payable(lidyverse).transfer((maxBid * lidyverseShare) / 100);
+        payable(receiver_).transfer(royaltyAmount);
+        payable(creator).transfer(creatorShare);
+        payable(lidyverse).transfer(mgshare);
         
+        areFundsWithdrawn=true;
         emit WithdrawFunds(msg.sender,maxBid);
         return true;
     }
@@ -149,7 +187,7 @@ contract Sale {
 
     function cancelSale() external returns(bool){
         require(msg.sender == creator);
-        require(getSaleState() == SaleState.OPEN);
+        require(getSaleState() == SaleState.OPEN ||getSaleState() == SaleState.NOT_STARTED);
         require(maxBid == 0);
         isCancelled = true;
         _nft.transferFrom(address(this), creator, tokenId);
@@ -161,6 +199,7 @@ contract Sale {
     function getSaleState() public view returns(SaleState) {
         if(isCancelled) return SaleState.CANCELLED;
         if(isDirectBuy) return SaleState.DIRECT_BUY;
+        if(block.timestamp < startTime) return SaleState.NOT_STARTED;
         if(block.timestamp >= endTime) return SaleState.ENDED;
         return SaleState.OPEN;
     }
