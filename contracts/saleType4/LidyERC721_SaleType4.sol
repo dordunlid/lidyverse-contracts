@@ -1406,6 +1406,64 @@ contract ERC721 is Context, ERC165, IERC721, IERC721Metadata {
     ) internal virtual {}
 }
 
+pragma solidity ^0.8.0;
+
+/**
+ * @dev These functions deal with verification of Merkle Trees proofs.
+ *
+ * The proofs can be generated using the JavaScript library
+ * https://github.com/miguelmota/merkletreejs[merkletreejs].
+ * Note: the hashing algorithm should be keccak256 and pair sorting should be enabled.
+ *
+ * See `test/utils/cryptography/MerkleProof.test.js` for some examples.
+ */
+library MerkleProof {
+    /**
+     * @dev Returns true if a `leaf` can be proved to be a part of a Merkle tree
+     * defined by `root`. For this, a `proof` must be provided, containing
+     * sibling hashes on the branch from the leaf to the root of the tree. Each
+     * pair of leaves and each pair of pre-images are assumed to be sorted.
+     */
+    function verify(
+        bytes32[] memory proof,
+        bytes32 root,
+        bytes32 leaf
+    ) internal pure returns (bool) {
+        return processProof(proof, leaf) == root;
+    }
+
+    /**
+     * @dev Returns the rebuilt hash obtained by traversing a Merklee tree up
+     * from `leaf` using `proof`. A `proof` is valid if and only if the rebuilt
+     * hash matches the root of the tree. When processing the proof, the pairs
+     * of leafs & pre-images are assumed to be sorted.
+     *
+     * _Available since v4.4._
+     */
+    function processProof(bytes32[] memory proof, bytes32 leaf) internal pure returns (bytes32) {
+        bytes32 computedHash = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+            if (computedHash <= proofElement) {
+                // Hash(current computed hash + current element of the proof)
+                computedHash = _efficientHash(computedHash, proofElement);
+            } else {
+                // Hash(current element of the proof + current computed hash)
+                computedHash = _efficientHash(proofElement, computedHash);
+            }
+        }
+        return computedHash;
+    }
+
+    function _efficientHash(bytes32 a, bytes32 b) private pure returns (bytes32 value) {
+        assembly {
+            mstore(0x00, a)
+            mstore(0x20, b)
+            value := keccak256(0x00, 0x40)
+        }
+    }
+}
+
 // File: @openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol
 
 
@@ -1580,49 +1638,37 @@ pragma solidity ^0.8.2;
 
 
 contract LidyERC721ST4 is ERC721, ERC721Enumerable, Pausable, Ownable, ERC2981 {
+
     using Counters for Counters.Counter;
 
     Counters.Counter private _tokenIdCounter;
   
     mapping(uint256 => string) private MetadataCIDofNFTs;
-    mapping(address => bool) private minters;
     
     address private royaltyRecipient;
     uint96 private royaltyValue;
+    bytes32 public merkleRoot;
     
     uint256 public MINT_CAP = 1000;
 
     constructor(
         string memory name,
-        string memory symbol,
-        string memory uri,
-        address _royaltyRecipient,
-        uint96 _royaltyValue
+        string memory symbol
     ) ERC721(name, symbol) {
-        setURI(uri);
-        royaltyRecipient =  _royaltyRecipient;
-        royaltyValue = _royaltyValue;
-    }
-    
-    modifier onlyMinter() {
-        require(minters[msg.sender], "Caller does not allowed to mint NFTs!");
-        _;
-    }
-    
-    function addMinter(address minterAddress) external onlyOwner {
-    	minters[minterAdress] = true;
+
     }
 
-    function removeMinter(address minterAdress) external onlyOwner {
-    	minters[minterAddress] = false;
+    function setMerkleRoot(bytes32 _merkleRoot) external onlyOwner {
+        merkleRoot = _merkleRoot;
     }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         require(_exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
 
-        string memory baseURI = MetadatCIDofNFTs[tokenId];
+        string memory baseURI = MetadataCIDofNFTs[tokenId];
         return bytes(baseURI).length > 0 ? string(abi.encodePacked("ipfs://",baseURI)) : "";
     }
+
 
     function pause() public onlyOwner {
         _pause();
@@ -1633,10 +1679,10 @@ contract LidyERC721ST4 is ERC721, ERC721Enumerable, Pausable, Ownable, ERC2981 {
     }
     
     function tokensByAddress(address addressToQuery) public view returns(uint256[]  memory) {
-	uint balance_ =  balanceOf(addressToQuery);
-	uint256[] memory tokenIds = new uint256[](balance_);
-	for(uint256 i=0;i<balance_;i++){
-	   tokenIds[i] =  tokenOfOwnerByIndex(addressToQuery,i);
+	    uint balance_ =  balanceOf(addressToQuery);
+	    uint256[] memory tokenIds = new uint256[](balance_);
+	    for(uint256 i=0;i<balance_;i++){
+	    tokenIds[i] =  tokenOfOwnerByIndex(addressToQuery,i);
 	}
 	return tokenIds;
     }
@@ -1650,16 +1696,16 @@ contract LidyERC721ST4 is ERC721, ERC721Enumerable, Pausable, Ownable, ERC2981 {
     	}
     }
 
-    function safeMint(string memory tokenURI_) public onlyMinters whenNotPaused{
-		
-        uint256 tokenId = _tokenIdCounter.current();
-	require(tokenId < MINT_CAP, "THE CONTRACT IS FULL");
+    function safeMint(string memory tokenUri_,  bytes32[] calldata proof, uint96 royaltyValue_) public whenNotPaused {
+        uint256 currentTokenId = _tokenIdCounter.current();
+	    require(currentTokenId < MINT_CAP, "THE CONTRACT IS FULL");
+        require(MerkleProof.verify(proof, merkleRoot, keccak256(abi.encodePacked(msg.sender))), "You are not approved!");
+        _safeMint(msg.sender, currentTokenId);
+        _setTokenRoyalty(currentTokenId, msg.sender, royaltyValue_);
+        MetadataCIDofNFTs[currentTokenId] = tokenUri_;
         _tokenIdCounter.increment();
-        _safeMint(msg.sender, tokenId);
-        _setTokenRoyalty(tokenId, royaltyRecipient, royaltyValue);
-        MetadatCIDofNFTS[tokenId] = tokenURI_;
     }
-    
+
     function _beforeTokenTransfer(address from, address to, uint256 tokenId)
         internal
         whenNotPaused
